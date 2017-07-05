@@ -12,6 +12,7 @@
 #include <netinet/ip.h> // struct ip
 #include <netinet/tcp.h> // tcphdr
 #include <pcap/pcap.h> // pcap
+#include <pthread.h> // pthread_t
 
 using namespace std;
 /*
@@ -26,6 +27,8 @@ const uint16_t tcp_dst_port = 55555;
 /*
   METHODS SIGNATURES
 */
+// Create and init socket
+void create_init_socket(const char *cmd);
 
 // Calc IP header checksum
 uint16_t ip_checksum(const uint16_t &header,
@@ -70,27 +73,26 @@ void packet_intercepter(u_char *user,
 int main(int argc, char *argv[]) {
   // Variables
   int status = EXIT_FAILURE;
-  const int optval = 1;
+  pthread_t thread;
   
   cout << "Brace yourself\n\tspoofing is comin'..." << endl;
 
-  // Creates RAW socket
-  if ((raw_socket = socket(AF_INET, SOCK_RAW, IPPROTO_RAW)) < 0) {
-    cerr << "Error: socket().\nTry: sudo " << argv[0] << endl;
+  // Create a new thread
+  if (pthread_create(&thread,
+		     NULL, // thread created with default attributes
+		     pthread_capture_tcp, // start_routine
+		     NULL) // because pthread_capture_tcp has no argument
+      != 0) {
+    cerr << "Error: pthread_create().\n" << endl;
     exit(status);
-  } else {
-    cout << "Success: socket()." << endl;
+    
   }
+  // Create and init' the socket then send begin TCP 3-way handshake
+  create_init_socket(argv[0]);
 
-  // Adds socket option IP_HDRINCL (i.e packet must contain an IP header)
-  if (setsockopt(raw_socket, IPPROTO_IP, IP_HDRINCL, &optval, sizeof(optval)) < 0) {
-    cerr << "Error: setsockopt(...IP_HDRINCL...)." << endl;
-    exit(status);
-  }
-
-  // TCP - 3-way handshake 1rst step: syn
-  tcp_syn(raw_socket);
-
+  // Wait for thread to terminate
+  pthread_join(thread, NULL);
+  
   // Close raw_socket
   if (close(raw_socket) < 0) {
     cerr << "Error: close()." << endl;
@@ -100,6 +102,28 @@ int main(int argc, char *argv[]) {
   status = EXIT_SUCCESS;
   return status;
 }
+
+// Create and init socket
+void create_init_socket(const char *cmd) {
+  const int optval = 1;
+  // Creates RAW socket
+  if ((raw_socket = socket(AF_INET, SOCK_RAW, IPPROTO_RAW)) < 0) {
+    cerr << "Error: socket().\nTry: sudo " << cmd << endl;
+    exit(EXIT_FAILURE);
+  } else {
+    cout << "Success: socket()." << endl;
+  }
+
+  // Adds socket option IP_HDRINCL (i.e packet must contain an IP header)
+  if (setsockopt(raw_socket, IPPROTO_IP, IP_HDRINCL, &optval, sizeof(optval)) < 0) {
+    cerr << "Error: setsockopt(...IP_HDRINCL...)." << endl;
+    exit(EXIT_FAILURE);
+  }
+
+  // TCP - 3-way handshake 1rst step: syn
+  tcp_syn(raw_socket);
+}
+
 // Calc IP header checksum
 uint16_t ip_checksum(const uint16_t *header, size_t length) {
   const uint16_t *iterator = header;
@@ -210,7 +234,7 @@ void tcp_syn(int fd) {
     close(fd);
     exit(EXIT_FAILURE);
   } else {
-    cout << "Success: sendto()." << endl;
+    cout << "Success: sendto() SYN." << endl;
   }
 }
 
@@ -273,7 +297,7 @@ void tcp_syn_ack(int fd, // socket
     close(fd);
     exit(EXIT_FAILURE);
   } else {
-    cout << "Success: sendto()." << endl;
+    cout << "Success: sendto() ACK-SYN." << endl;
   }
 }
 
@@ -295,7 +319,7 @@ void packet_intercepter(u_char *user,
 }
 
 // Capture TCP segment on a new thread
-void * pthread_capture_tcp(void *arg) {
+void *pthread_capture_tcp(void *arg) {
   pcap_t *open_device = NULL;
   char errbuf[PCAP_ERRBUF_SIZE]; // error buffer
   const char *device = "any"; // Capture from all device available
@@ -308,6 +332,8 @@ void * pthread_capture_tcp(void *arg) {
   bpf_u_int32 netp; //network number
   bpf_u_int32 maskp; // netmask
   struct bpf_program fp;
+  int link_layer = 0; // link layer
+  uint8_t link_layer_length = 0; // link layer length
 
   // open a device for capturing
   if ((open_device = pcap_open_live(device, snaplen, promisc, to_ms, errbuf)) == NULL) {
@@ -333,6 +359,30 @@ void * pthread_capture_tcp(void *arg) {
     exit(EXIT_FAILURE);
   }
 
-  // TODO
+  // set the filter
+  if ((pcap_setfilter(open_device, &fp)) == -1 ) {
+    cerr << "Error: pcap_setfilter().\n" << endl;
+    close(raw_socket);
+    exit(EXIT_FAILURE);
+  }
+
+  /*
+    get the link-layer header type
+    possible values : http://www.tcpdump.org/linktypes.html 
+  */
+  link_layer = pcap_datalink(open_device);
+  link_layer_length = 14;
+
+  if (link_layer == 1) {
+    link_layer_length = 14;
+    }
+
+  if (pcap_loop(open_device, -1, packet_intercepter, (u_char *)&link_layer_length) < 0) {
+    cerr << "Error: pcap_loop().\n" << endl;
+    close(raw_socket);
+    exit(EXIT_FAILURE);
+  }
   
+  // free a BPF program
+  pcap_freecode(&fp);
 }

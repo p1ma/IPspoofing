@@ -3,7 +3,7 @@ CC = g++
 
 # Flags
 FLAGS= -std=c++11 -Wall -g -o
-ENDFLAGS = -lpcap
+ENDFLAGS = -lpcap -pthread
 
 # Actions
 all: main.cpp
