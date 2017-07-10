@@ -19,7 +19,7 @@ using namespace std;
   GLOBAL VARIABLE
 */
 int raw_socket = 0; // socket
-const char *ip_src_addr = "192.168.1.66";
+const char *ip_src_addr = "222.222.222.222";
 const char *ip_dst_addr = "192.168.1.1";
 const uint16_t tcp_src_port = 6666;
 const uint16_t tcp_dst_port = 55555;
@@ -106,6 +106,8 @@ int main(int argc, char *argv[]) {
 // Create and init socket
 void create_init_socket(const char *cmd) {
   const int optval = 1;
+  const int frag = IP_PMTUDISC_DO;
+  
   // Creates RAW socket
   if ((raw_socket = socket(AF_INET, SOCK_RAW, IPPROTO_RAW)) < 0) {
     cerr << "Error: socket().\nTry: sudo " << cmd << endl;
@@ -117,6 +119,12 @@ void create_init_socket(const char *cmd) {
   // Adds socket option IP_HDRINCL (i.e packet must contain an IP header)
   if (setsockopt(raw_socket, IPPROTO_IP, IP_HDRINCL, &optval, sizeof(optval)) < 0) {
     cerr << "Error: setsockopt(...IP_HDRINCL...)." << endl;
+    exit(EXIT_FAILURE);
+  }
+
+  // Adds socket option IP_DONTFRAG don't fragment flag
+  if (setsockopt(raw_socket, IPPROTO_IP, IP_MTU_DISCOVER, &frag, sizeof(frag)) < 0) {
+    cerr << "Error: setsockopt(...IP_DONTFRAG...)." << endl;
     exit(EXIT_FAILURE);
   }
 
@@ -210,7 +218,7 @@ void tcp_syn(int fd) {
   tcp_header.th_seq = htonl(0x123456); // Sequence number of first octet in this segment.
   tcp_header.th_off = sizeof(struct tcphdr) / 4;// Unused Data offset.
   tcp_header.th_flags = TH_SYN; // SYN request
-  tcp_header.th_win = TCP_MAXWIN; // Number of acceptable octects.
+  tcp_header.th_win = TCP_MAXWIN; // Number of acceptable octets.
   tcp_header.th_sum = tcp_checksum(ip_header.ip_src.s_addr,
 				   ip_header.ip_dst.s_addr,
 				   ip_header.ip_p,
@@ -219,7 +227,7 @@ void tcp_syn(int fd) {
 
   // Size of both headers (ip + tcp)
   size_t total_length = sizeof(ip_header) + sizeof(tcp_header);
-  char packet[total_length] = { 0 };
+  unsigned char packet[total_length] = { 0 };
   memcpy(packet, &ip_header, sizeof(ip_header));
   memcpy((sizeof(ip_header) + packet), &tcp_header, sizeof(tcp_header));
 
@@ -234,7 +242,7 @@ void tcp_syn(int fd) {
     close(fd);
     exit(EXIT_FAILURE);
   } else {
-    cout << "Success: sendto() SYN." << endl;
+    cout << "Success: sendto() SYN from " << ip_src_addr << " to " << ip_dst_addr  << "." << endl;
   }
 }
 
@@ -262,7 +270,8 @@ void tcp_syn_ack(int fd, // socket
   ip_header.ip_sum = ip_checksum((uint16_t *)&ip_header,
 				 sizeof(ip_header)); // Ipv4 checksum
 
-  /* TCP header 
+  /* 
+     TCP header 
      Cf: http://www.propox.com/download/edunet_doc/all/html/structtcphdr.html
   */
   struct tcphdr tcp_header;
@@ -272,7 +281,7 @@ void tcp_syn_ack(int fd, // socket
   tcp_header.th_seq = htonl(0x123456 + 1); // Sequence number of first octet in this segment. + 1
   tcp_header.th_ack = htonl(no_seq + 1);
   tcp_header.th_off = sizeof(struct tcphdr) / 4;// Unused Data offset.
-  tcp_header.th_flags = TH_SYN; // SYN request
+  tcp_header.th_flags = TH_ACK; // ACK request
   tcp_header.th_win = TCP_MAXWIN; // Number of acceptable octects.
   tcp_header.th_sum = tcp_checksum(ip_header.ip_src.s_addr,
 				   ip_header.ip_dst.s_addr,
@@ -282,7 +291,7 @@ void tcp_syn_ack(int fd, // socket
 
   // Size of both headers (ip + tcp)
   size_t total_length = sizeof(ip_header) + sizeof(tcp_header);
-  char packet[total_length] = { 0 };
+  unsigned char packet[total_length] = { 0 };
   memcpy(packet, &ip_header, sizeof(ip_header));
   memcpy((sizeof(ip_header) + packet), &tcp_header, sizeof(tcp_header));
 
@@ -297,7 +306,7 @@ void tcp_syn_ack(int fd, // socket
     close(fd);
     exit(EXIT_FAILURE);
   } else {
-    cout << "Success: sendto() ACK-SYN." << endl;
+    cout << "Success: sendto() ACK-SYN from " << ip_src_addr << " to " << ip_dst_addr  << "." << endl;
   }
 }
 
@@ -375,7 +384,7 @@ void *pthread_capture_tcp(void *arg) {
 
   if (link_layer == 1) {
     link_layer_length = 14;
-    }
+  }
 
   if (pcap_loop(open_device, -1, packet_intercepter, (u_char *)&link_layer_length) < 0) {
     cerr << "Error: pcap_loop().\n" << endl;
